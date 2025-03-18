@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Infinite Recursive 3D Scene Demo</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+    }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      font-family: sans-serif;
+      z-index: 999;
+      background: rgba(0,0,0,0.5);
+      padding: 8px;
+      border-radius: 4px;
+      max-width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <p id="infoText">Welcome to the gallery!</p>
+  </div>
+
+  <!-- Load Three.js (use a version you have available, or download locally) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/PointerLockControls.js"></script>
+
+  <script>
+    /**
+     * Infinite Recursive 3D Scene Demo using Three.js
+     * with "hover" (look) detection on paintings to show descriptions.
+     */
+
+    let camera, scene, renderer, controls;
+
+    // Use a clock for smooth animation timing
+    let clock = new THREE.Clock();
+
+    // Movement variables
+    let velocity = new THREE.Vector3();
+    const moveSpeed = 6.0;
+
+    // Corridor constants
+    const CORRIDOR_LENGTH = 50;
+    const PORTAL_SIZE = 6;
+
+    // We'll use a texture loader to load "painting" images
+    const textureLoader = new THREE.TextureLoader();
+
+    // An array of painting data (image + description).
+    // You can replace or expand these entries as desired.
+    const paintingData = [
+      {
+        url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg',
+        description: '“The Starry Night” (1889) by Vincent van Gogh.'
+      },
+      {
+        url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Vincent_van_Gogh_-_Sunflowers_-_VGM_F458.jpg/640px-Vincent_van_Gogh_-_Sunflowers_-_VGM_F458.jpg',
+        description: '“Sunflowers” (1888) by Vincent van Gogh.'
+      },
+      {
+        url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Vincent_van_Gogh_-_Irises_%281889%29.jpg/1554px-Vincent_van_Gogh_-_Irises_%281889%29.jpg',
+        description: '“Irises” (1889) by Vincent van Gogh.'
+      },
+      {
+        url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/La_Chambre_%C3%A0_Arles%2C_by_Vincent_van_Gogh%2C_from_C2RMF.jpg/640px-La_Chambre_%C3%A0_Arles%2C_by_Vincent_van_Gogh%2C_from_C2RMF.jpg',
+        description: '“Bedroom in Arles” (1888) by Vincent van Gogh.'
+      }
+    ];
+
+    // Pre-load the textures
+    const paintingTextures = paintingData.map(data => {
+      return {
+        texture: textureLoader.load(data.url),
+        description: data.description
+      };
+    });
+
+    // NEW: Keep track of painting meshes so we can raycast against them later
+    const allPaintings = [];
+
+    // Setup a raycaster for "hover" detection
+    const raycaster = new THREE.Raycaster();
+
+    // For updating #info text
+    const infoText = document.getElementById('infoText');
+
+    init();
+    animate();
+
+    function init() {
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xa0a0c0);
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+
+      // PointerLockControls
+      controls = new THREE.PointerLockControls(camera, renderer.domElement);
+      document.addEventListener("click", () => {
+        controls.lock();
+      });
+      scene.add(controls.getObject());
+
+      // Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      dirLight.position.set(10, 10, 10);
+      scene.add(dirLight);
+
+      // Build corridors
+      buildCorridorChain(8);
+
+      // Start the camera near the first corridor
+      controls.getObject().position.set(0, 2, 0);
+
+      // Listen for window resize
+      window.addEventListener("resize", onWindowResize);
+    }
+
+    /**
+     * Build multiple corridors, each with a "portal" view into the next.
+     */
+    function buildCorridorChain(count) {
+      let previousCorridor = null;
+
+      for (let i = 0; i < count; i++) {
+        const corridor = createCorridor(i);
+        corridor.position.z = -i * CORRIDOR_LENGTH;
+        scene.add(corridor);
+
+        if (previousCorridor) {
+          createPortal(previousCorridor, corridor, i);
+        }
+        previousCorridor = corridor;
+      }
+    }
+
+    /**
+     * Create a corridor segment with:
+     * - Floor, ceiling, walls
+     * - "Paintings" on the walls
+     */
+    function createCorridor(index) {
+      const corridorGroup = new THREE.Group();
+
+      // Floor
+      const floorGeometry = new THREE.PlaneGeometry(10, CORRIDOR_LENGTH);
+      const floorMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc });
+      const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+      floorMesh.rotation.x = -Math.PI / 2;
+      floorMesh.position.y = 0;
+      corridorGroup.add(floorMesh);
+
+      // Ceiling
+      const ceilingGeometry = new THREE.PlaneGeometry(10, CORRIDOR_LENGTH);
+      const ceilingMaterial = new THREE.MeshPhongMaterial({ color: 0xbbbbbb });
+      const ceilingMesh = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+      ceilingMesh.rotation.x = Math.PI / 2;
+      ceilingMesh.position.y = 4;
+      corridorGroup.add(ceilingMesh);
+
+      // Walls
+      const wallGeometry = new THREE.PlaneGeometry(4, CORRIDOR_LENGTH);
+      const wallMaterial = new THREE.MeshPhongMaterial({
+        color: 0x9eaede,
+        side: THREE.DoubleSide,
+      });
+
+      const wallMeshLeft = new THREE.Mesh(wallGeometry, wallMaterial);
+      wallMeshLeft.position.set(-5, 2, 0);
+      wallMeshLeft.rotation.y = Math.PI / 2;
+      corridorGroup.add(wallMeshLeft);
+
+      const wallMeshRight = new THREE.Mesh(wallGeometry, wallMaterial);
+      wallMeshRight.position.set(5, 2, 0);
+      wallMeshRight.rotation.y = -Math.PI / 2;
+      corridorGroup.add(wallMeshRight);
+
+      // Add paintings
+      addPaintingsToCorridor(corridorGroup);
+
+      return corridorGroup;
+    }
+
+    /**
+     * Create a "portal" opening so you can see the next corridor in the chain.
+     */
+    function createPortal(corridorA, corridorB, index) {
+      const portalFrameGeometry = new THREE.RingGeometry(
+        PORTAL_SIZE - 0.2,
+        PORTAL_SIZE,
+        32
+      );
+      const portalFrameMaterial = new THREE.MeshPhongMaterial({ color: 0xffffff });
+      const portalFrameMesh = new THREE.Mesh(portalFrameGeometry, portalFrameMaterial);
+
+      portalFrameMesh.position.set(
+        0,
+        2,
+        -(index * CORRIDOR_LENGTH) + -CORRIDOR_LENGTH / 2
+      );
+      portalFrameMesh.rotation.x = Math.PI / 2;
+
+      scene.add(portalFrameMesh);
+    }
+
+    /**
+     * Place a couple of paintings on each side of the corridor at different z offsets.
+     */
+    function addPaintingsToCorridor(corridorGroup) {
+      // We'll place them at a couple of different z positions
+      const paintingZPositions = [-10, 10]; // two spots along the corridor
+
+      paintingZPositions.forEach((zPos) => {
+        // Left painting
+        const leftPainting = createPaintingMesh();
+        leftPainting.position.set(-4.9, 2, zPos);
+        leftPainting.rotation.y = Math.PI / 2;
+        corridorGroup.add(leftPainting);
+
+        // Right painting
+        const rightPainting = createPaintingMesh();
+        rightPainting.position.set(4.9, 2, zPos);
+        rightPainting.rotation.y = -Math.PI / 2;
+        corridorGroup.add(rightPainting);
+      });
+    }
+
+    /**
+     * Helper function to create a single "painting" as a plane with a random texture.
+     * We also assign a description for "hover" interaction.
+     */
+    function createPaintingMesh() {
+      // Randomly pick one of our preloaded textures
+      const randomItem = paintingTextures[Math.floor(Math.random() * paintingTextures.length)];
+
+      // Basic plane for the painting (2 wide x 3 tall, for a vertical orientation)
+      const paintingGeometry = new THREE.PlaneGeometry(2, 3);
+      // Use MeshBasicMaterial so it's unaffected by lighting (like a lit painting).
+      const paintingMaterial = new THREE.MeshBasicMaterial({ map: randomItem.texture });
+
+      const paintingMesh = new THREE.Mesh(paintingGeometry, paintingMaterial);
+
+      // Store the description in userData for easy access
+      paintingMesh.userData.description = randomItem.description;
+
+      // Add to our global array so we can raycast it
+      allPaintings.push(paintingMesh);
+
+      return paintingMesh;
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    /**
+     * Main animation loop
+     */
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+      velocity.set(0, 0, 0);
+
+      if (controls.isLocked === true) {
+        if (isKeyDown("KeyW")) velocity.z -= moveSpeed * delta; // forward
+        if (isKeyDown("KeyS")) velocity.z += moveSpeed * delta; // backward
+        if (isKeyDown("KeyA")) velocity.x -= moveSpeed * delta; // left
+        if (isKeyDown("KeyD")) velocity.x += moveSpeed * delta; // right
+
+        // Move the camera
+        controls.moveRight(velocity.x);
+        controls.moveForward(-velocity.z);
+
+        // NEW: Raycast from camera forward to detect "hover" on paintings
+        hoverCheck();
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    /**
+     * Check if the camera is looking at (i.e., "hovering over") a painting.
+     * If so, display its description; otherwise revert to default text.
+     */
+    function hoverCheck() {
+      // Set the raycaster's origin to the camera position
+      // and direction to the camera's looking direction.
+      raycaster.set(
+        camera.getWorldPosition(new THREE.Vector3()),
+        camera.getWorldDirection(new THREE.Vector3())
+      );
+
+      // Intersect with all paintings
+      const intersects = raycaster.intersectObjects(allPaintings, false);
+
+      if (intersects.length > 0) {
+        // Sort by distance (usually they are already in distance order).
+        const firstHit = intersects[0].object;
+        // If it's close enough (for a typical “hover” feel, ~5 units or so):
+        if (intersects[0].distance < 5) {
+          infoText.textContent = firstHit.userData.description;
+          return;
+        }
+      }
+
+      // If no painting was close enough, revert to default
+      infoText.textContent = "Welcome to the gallery!";
+    }
+
+    // Track key states for WASD movement
+    const keyStates = {};
+    document.addEventListener("keydown", (event) => {
+      keyStates[event.code] = true;
+    });
+    document.addEventListener("keyup", (event) => {
+      keyStates[event.code] = false;
+    });
+
+    function isKeyDown(keyCode) {
+      return keyStates[keyCode] === true;
+    }
+  </script>
+</body>
+</html>
