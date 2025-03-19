@@ -24,11 +24,54 @@
       border-radius: 4px;
       max-width: 300px;
     }
+    /* Mobile D-Pad Controls */
+    #mobileControls {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      z-index: 1000;
+      display: none; /* will show only on mobile */
+      user-select: none;
+    }
+    #mobileControls #dpad {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #mobileControls button {
+      width: 60px;
+      height: 60px;
+      margin: 5px;
+      font-size: 24px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.3);
+      color: #fff;
+    }
+    /* Arrange left/right buttons in a row */
+    #dpadRow {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      width: 100%;
+    }
   </style>
 </head>
 <body>
   <div id="info">
     <p id="infoText">Welcome to the gallery!</p>
+  </div>
+
+  <!-- Mobile Controls Overlay -->
+  <div id="mobileControls">
+    <div id="dpad">
+      <button id="btnForward">↑</button>
+      <div id="dpadRow">
+        <button id="btnLeft">←</button>
+        <button id="btnRight">→</button>
+      </div>
+      <button id="btnBackward">↓</button>
+    </div>
   </div>
 
   <!-- Background music (public domain: Beethoven's "Für Elise") -->
@@ -42,19 +85,27 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/PointerLockControls.js"></script>
 
   <script>
+    // Global variables
     let camera, scene, renderer, controls;
     let clock = new THREE.Clock();
     let velocity = new THREE.Vector3();
     const moveSpeed = 6.0;
-
-    // Corridor constants
     const CORRIDOR_LENGTH = 50;
     const PORTAL_SIZE = 6;
-
-    // Texture loader for paintings
     const textureLoader = new THREE.TextureLoader();
+    const allPaintings = [];
+    const raycaster = new THREE.Raycaster();
+    const infoText = document.getElementById('infoText');
 
-    // Updated painting data with titles added
+    // Mobile movement flags
+    let mobileForward = false,
+        mobileBackward = false,
+        mobileLeft = false,
+        mobileRight = false;
+    let lastTouchX = null,
+        lastTouchY = null;
+
+    // Painting data with titles and descriptions
     const paintingData = [
       {
         url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg',
@@ -78,7 +129,7 @@
       }
     ];
 
-    // Pre-load textures and include title info
+    // Pre-load textures with title info
     const paintingTextures = paintingData.map(data => {
       return {
         texture: textureLoader.load(data.url),
@@ -87,10 +138,8 @@
       };
     });
 
-    // Keep track of all painting meshes for hover detection
-    const allPaintings = [];
-    const raycaster = new THREE.Raycaster();
-    const infoText = document.getElementById('infoText');
+    // Detect mobile devices
+    const isMobile = ('ontouchstart' in window);
 
     init();
     animate();
@@ -100,27 +149,41 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
-      // Scene with fog for a moody atmosphere
+      // Scene setup with fog
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x202030);
       scene.fog = new THREE.Fog(0x202030, 20, 70);
 
       camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
-      // PointerLockControls for first-person navigation
-      controls = new THREE.PointerLockControls(camera, renderer.domElement);
-      document.addEventListener("click", () => {
-        controls.lock();
-        // Start the background music on click (ensuring user interaction)
-        const bgMusic = document.getElementById("backgroundMusic");
-        if (bgMusic.paused) {
-          bgMusic.volume = 0.3;
-          bgMusic.play();
-        }
-      });
-      scene.add(controls.getObject());
+      // Desktop: use PointerLockControls; Mobile: set up touch-based controls
+      if (!isMobile) {
+        controls = new THREE.PointerLockControls(camera, renderer.domElement);
+        document.addEventListener("click", () => {
+          controls.lock();
+          const bgMusic = document.getElementById("backgroundMusic");
+          if (bgMusic.paused) {
+            bgMusic.volume = 0.3;
+            bgMusic.play();
+          }
+        });
+        scene.add(controls.getObject());
+      } else {
+        // Show mobile controls overlay
+        document.getElementById('mobileControls').style.display = 'block';
+        setupMobileControls();
+        // Start music on first touch anywhere
+        document.addEventListener("touchstart", function startMusic() {
+          const bgMusic = document.getElementById("backgroundMusic");
+          if (bgMusic.paused) {
+            bgMusic.volume = 0.3;
+            bgMusic.play();
+          }
+          document.removeEventListener("touchstart", startMusic);
+        });
+      }
 
-      // Ambient and directional lights
+      // Lighting
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
       scene.add(ambientLight);
 
@@ -128,12 +191,19 @@
       dirLight.position.set(10, 10, 10);
       scene.add(dirLight);
 
-      // Build the corridor chain with enhanced lighting
+      // Build corridors
       buildCorridorChain(8);
 
       // Set starting camera position
-      controls.getObject().position.set(0, 2, 0);
+      camera.position.set(0, 2, 0);
       window.addEventListener("resize", onWindowResize);
+
+      // For mobile: set up swipe-to-look on the canvas (exclude touches on controls)
+      if (isMobile) {
+        renderer.domElement.addEventListener('touchstart', onTouchStart, false);
+        renderer.domElement.addEventListener('touchmove', onTouchMove, false);
+        renderer.domElement.addEventListener('touchend', onTouchEnd, false);
+      }
     }
 
     function buildCorridorChain(count) {
@@ -151,14 +221,12 @@
 
     function createCorridor(index) {
       const corridorGroup = new THREE.Group();
-
-      // Floor with a darker, cooler tone
+      // Floor
       const floorGeometry = new THREE.PlaneGeometry(10, CORRIDOR_LENGTH);
       const floorMaterial = new THREE.MeshPhongMaterial({ color: 0x333344 });
       const floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
       floorMesh.rotation.x = -Math.PI / 2;
       corridorGroup.add(floorMesh);
-
       // Ceiling
       const ceilingGeometry = new THREE.PlaneGeometry(10, CORRIDOR_LENGTH);
       const ceilingMaterial = new THREE.MeshPhongMaterial({ color: 0x222233 });
@@ -166,8 +234,7 @@
       ceilingMesh.rotation.x = Math.PI / 2;
       ceilingMesh.position.y = 4;
       corridorGroup.add(ceilingMesh);
-
-      // Walls with a cool blue tint
+      // Walls
       const wallGeometry = new THREE.PlaneGeometry(4, CORRIDOR_LENGTH);
       const wallMaterial = new THREE.MeshPhongMaterial({
         color: 0x555577,
@@ -177,20 +244,16 @@
       wallMeshLeft.position.set(-5, 2, 0);
       wallMeshLeft.rotation.y = Math.PI / 2;
       corridorGroup.add(wallMeshLeft);
-
       const wallMeshRight = new THREE.Mesh(wallGeometry, wallMaterial);
       wallMeshRight.position.set(5, 2, 0);
       wallMeshRight.rotation.y = -Math.PI / 2;
       corridorGroup.add(wallMeshRight);
-
-      // Additional point light for dramatic effect in the corridor
+      // Extra light for ambiance
       const pointLight = new THREE.PointLight(0xffffff, 0.5, 20);
       pointLight.position.set(0, 3, 0);
       corridorGroup.add(pointLight);
-
-      // Add paintings to the corridor
+      // Paintings
       addPaintingsToCorridor(corridorGroup);
-
       return corridorGroup;
     }
 
@@ -204,16 +267,12 @@
     }
 
     function addPaintingsToCorridor(corridorGroup) {
-      // Place paintings at two positions along the corridor
       const paintingZPositions = [-10, 10];
       paintingZPositions.forEach((zPos) => {
-        // Left painting
         const leftPainting = createPaintingMesh();
         leftPainting.position.set(-4.9, 2, zPos);
         leftPainting.rotation.y = Math.PI / 2;
         corridorGroup.add(leftPainting);
-
-        // Right painting
         const rightPainting = createPaintingMesh();
         rightPainting.position.set(4.9, 2, zPos);
         rightPainting.rotation.y = -Math.PI / 2;
@@ -221,7 +280,6 @@
       });
     }
 
-    // Create a painting mesh with an attached title sprite
     function createPaintingMesh() {
       const randomItem = paintingTextures[Math.floor(Math.random() * paintingTextures.length)];
       const paintingGeometry = new THREE.PlaneGeometry(2, 3);
@@ -229,17 +287,13 @@
       const paintingMesh = new THREE.Mesh(paintingGeometry, paintingMaterial);
       paintingMesh.userData.description = randomItem.description;
       paintingMesh.userData.title = randomItem.title;
-      
-      // Create a text sprite for the title and position it slightly above the painting
       const titleSprite = createTextSprite(randomItem.title);
       titleSprite.position.set(0, 1.8, 0.1);
       paintingMesh.add(titleSprite);
-      
       allPaintings.push(paintingMesh);
       return paintingMesh;
     }
 
-    // Utility: Create a sprite from a canvas with the given text
     function createTextSprite(message) {
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
@@ -252,7 +306,6 @@
       context.font = fontSize + "px Arial";
       context.fillStyle = "white";
       context.fillText(message, 0, fontSize);
-      
       const texture = new THREE.CanvasTexture(canvas);
       texture.minFilter = THREE.LinearFilter;
       const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
@@ -271,13 +324,25 @@
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
       velocity.set(0, 0, 0);
-      if (controls.isLocked === true) {
-        if (isKeyDown("KeyW")) velocity.z -= moveSpeed * delta;
-        if (isKeyDown("KeyS")) velocity.z += moveSpeed * delta;
-        if (isKeyDown("KeyA")) velocity.x -= moveSpeed * delta;
-        if (isKeyDown("KeyD")) velocity.x += moveSpeed * delta;
-        controls.moveRight(velocity.x);
-        controls.moveForward(-velocity.z);
+      
+      if (!isMobile) {
+        if (controls.isLocked === true) {
+          if (isKeyDown("KeyW")) velocity.z -= moveSpeed * delta;
+          if (isKeyDown("KeyS")) velocity.z += moveSpeed * delta;
+          if (isKeyDown("KeyA")) velocity.x -= moveSpeed * delta;
+          if (isKeyDown("KeyD")) velocity.x += moveSpeed * delta;
+          controls.moveRight(velocity.x);
+          controls.moveForward(-velocity.z);
+          hoverCheck();
+        }
+      } else {
+        // Mobile movement based on dpad flags
+        if (mobileForward) velocity.z -= moveSpeed * delta;
+        if (mobileBackward) velocity.z += moveSpeed * delta;
+        if (mobileLeft) velocity.x -= moveSpeed * delta;
+        if (mobileRight) velocity.x += moveSpeed * delta;
+        camera.translateX(velocity.x);
+        camera.translateZ(velocity.z);
         hoverCheck();
       }
       renderer.render(scene, camera);
@@ -297,10 +362,53 @@
       infoText.textContent = "Welcome to the gallery!";
     }
 
+    // Desktop keyboard controls
     const keyStates = {};
     document.addEventListener("keydown", (event) => { keyStates[event.code] = true; });
     document.addEventListener("keyup", (event) => { keyStates[event.code] = false; });
     function isKeyDown(keyCode) { return keyStates[keyCode] === true; }
+
+    // Mobile: Set up on-screen dpad events
+    function setupMobileControls() {
+      const btnForward = document.getElementById('btnForward');
+      const btnBackward = document.getElementById('btnBackward');
+      const btnLeft = document.getElementById('btnLeft');
+      const btnRight = document.getElementById('btnRight');
+      
+      btnForward.addEventListener('touchstart', e => { mobileForward = true; e.preventDefault(); });
+      btnForward.addEventListener('touchend', e => { mobileForward = false; e.preventDefault(); });
+      btnBackward.addEventListener('touchstart', e => { mobileBackward = true; e.preventDefault(); });
+      btnBackward.addEventListener('touchend', e => { mobileBackward = false; e.preventDefault(); });
+      btnLeft.addEventListener('touchstart', e => { mobileLeft = true; e.preventDefault(); });
+      btnLeft.addEventListener('touchend', e => { mobileLeft = false; e.preventDefault(); });
+      btnRight.addEventListener('touchstart', e => { mobileRight = true; e.preventDefault(); });
+      btnRight.addEventListener('touchend', e => { mobileRight = false; e.preventDefault(); });
+    }
+
+    // Mobile: Swipe-to-look controls on canvas (ignore touches on dpad)
+    function onTouchStart(e) {
+      if(e.target.closest('#mobileControls')) return;
+      const touch = e.touches[0];
+      lastTouchX = touch.pageX;
+      lastTouchY = touch.pageY;
+    }
+    function onTouchMove(e) {
+      if(e.target.closest('#mobileControls')) return;
+      const touch = e.touches[0];
+      if(lastTouchX !== null && lastTouchY !== null) {
+        const dx = touch.pageX - lastTouchX;
+        const dy = touch.pageY - lastTouchY;
+        camera.rotation.y -= dx * 0.005;
+        camera.rotation.x -= dy * 0.005;
+        camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+      }
+      lastTouchX = touch.pageX;
+      lastTouchY = touch.pageY;
+    }
+    function onTouchEnd(e) {
+      lastTouchX = null;
+      lastTouchY = null;
+    }
   </script>
 </body>
 </html>
