@@ -31,6 +31,12 @@
     <p id="infoText">Welcome to the gallery!</p>
   </div>
 
+  <!-- Background music (public domain: Beethoven's "Für Elise") -->
+  <audio id="backgroundMusic" loop>
+    <source src="https://upload.wikimedia.org/wikipedia/commons/4/45/Beethoven_Fur_Elise.ogg" type="audio/ogg">
+    Your browser does not support the audio element.
+  </audio>
+
   <!-- Load Three.js and PointerLockControls -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/PointerLockControls.js"></script>
@@ -105,6 +111,12 @@
       controls = new THREE.PointerLockControls(camera, renderer.domElement);
       document.addEventListener("click", () => {
         controls.lock();
+        // Start the background music on click (ensuring user interaction)
+        const bgMusic = document.getElementById("backgroundMusic");
+        if (bgMusic.paused) {
+          bgMusic.volume = 0.3;
+          bgMusic.play();
+        }
       });
       scene.add(controls.getObject());
 
@@ -235,7 +247,6 @@
       context.font = fontSize + "px Arial";
       const metrics = context.measureText(message);
       const textWidth = metrics.width;
-      // Resize canvas to fit text
       canvas.width = textWidth;
       canvas.height = fontSize;
       context.font = fontSize + "px Arial";
@@ -246,7 +257,6 @@
       texture.minFilter = THREE.LinearFilter;
       const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
       const sprite = new THREE.Sprite(spriteMaterial);
-      // Scale sprite to a manageable size
       sprite.scale.set(textWidth / 100, fontSize / 100, 1);
       return sprite;
     }
